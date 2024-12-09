@@ -57,7 +57,35 @@ typedef struct posix_header
  *         -2 if the archive contains a header with an invalid version value,
  *         -3 if the archive contains a header with an invalid checksum value
  */
-int check_archive(int tar_fd);
+int check_archive(int tar_fd){
+
+    // valid magic 
+    tar_header_t header;
+    if (strncmp(header.magic, TMAGIC, TMAGLEN) != 0) {
+        return -1;
+    }
+
+    // valid version
+    if (strncmp(header.version, TVERSION, TVERSLEN) != 0){
+        return -2;
+    }
+
+    // valid checksum value
+    char tmp_chksum[sizeof(header.chksum)];
+    memcpy(tmp_chksum, header.chksum, sizeof(header.chksum));
+    memset(header.chksum, ' ', sizeof(header.chksum));
+    int res_sum = 0;
+    uint8_t *header_bytes = (uint8_t *)&header;
+    for (size_t i = 0; i < sizeof(tar_header_t); i++) {
+        res_sum += header_bytes[i];
+    }
+    int stored_checksum = TAR_INT(tmp_chksum);
+    if (res_sum != stored_checksum) {
+        return -3;
+    }
+
+    return 0;
+}
 
 /**
  * Checks whether an entry exists in the archive.
