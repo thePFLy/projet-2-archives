@@ -57,35 +57,7 @@ typedef struct posix_header
  *         -2 if the archive contains a header with an invalid version value,
  *         -3 if the archive contains a header with an invalid checksum value
  */
-int check_archive(int tar_fd){
-
-    // valid magic 
-    tar_header_t header;
-    if (strncmp(header.magic, TMAGIC, TMAGLEN) != 0) {
-        return -1;
-    }
-
-    // valid version
-    if (strncmp(header.version, TVERSION, TVERSLEN) != 0){
-        return -2;
-    }
-
-    // valid checksum value
-    char tmp_chksum[sizeof(header.chksum)];
-    memcpy(tmp_chksum, header.chksum, sizeof(header.chksum));
-    memset(header.chksum, ' ', sizeof(header.chksum));
-    int res_sum = 0;
-    uint8_t *header_bytes = (uint8_t *)&header;
-    for (size_t i = 0; i < sizeof(tar_header_t); i++) {
-        res_sum += header_bytes[i];
-    }
-    int stored_checksum = TAR_INT(tmp_chksum);
-    if (res_sum != stored_checksum) {
-        return -3;
-    }
-
-    return 0;
-}
+int check_archive(int tar_fd);
 
 /**
  * Checks whether an entry exists in the archive.
@@ -96,21 +68,7 @@ int check_archive(int tar_fd){
  * @return zero if no entry at the given path exists in the archive,
  *         any other value otherwise.
  */
-int exists(int tar_fd, char *path) {
-    tar_header_t header;
-    ssize_t num_bytes;
-
-    while ((num_bytes = read(tar_fd, &header, sizeof(tar_header_t))) == sizeof(tar_header_t)) {
-        if (strncmp(header.name, path, sizeof(header.name)) == 0) {
-            return 3;
-        }
-        // padding
-        lseek(tar_fd, 512 - num_bytes, SEEK_CUR);
-    }
-
-    return 0;
-}
-
+int exists(int tar_fd, char *path);
 
 /**
  * Checks whether an entry exists in the archive and is a directory.
@@ -121,24 +79,7 @@ int exists(int tar_fd, char *path) {
  * @return zero if no entry at the given path exists in the archive or the entry is not a directory,
  *         any other value otherwise.
  */
-int is_dir(int tar_fd, char *path){
-    tar_header_t header;
-    ssize_t num_bytes;
-
-    while((num_bytes = read(tar_fd, &header, sizeof(tar_header_t))) == sizeof(tar_header_t)){
-        // path entry (compare)
-        if (strcnmp(header.name, path, sizeof(header.name)) == 0 ){
-            // directory ? if yes -> not 0
-            if (header.typeflag == '5'){
-                return 3;
-            }
-            return 0;
-        }
-        //padding
-        lseek(tar_fd, 512 - num_bytes, SEEK_CUR);
-    }
-    return 0;
-}
+int is_dir(int tar_fd, char *path);
 
 /**
  * Checks whether an entry exists in the archive and is a file.
@@ -149,24 +90,7 @@ int is_dir(int tar_fd, char *path){
  * @return zero if no entry at the given path exists in the archive or the entry is not a file,
  *         any other value otherwise.
  */
-int is_file(int tar_fd, char *path){
-    tar_header_t header;
-    ssize_t num_bytes;
-
-    while((num_bytes = read(tar_fd, &header, sizeof(tar_header_t))) == sizeof(tar_header_t)){
-        // path entry (compare)
-        if (strcnmp(header.name, path, sizeof(header.name)) == 0 ){
-            // same but for files
-            if (header.typeflag == '0'){
-                return 3;
-            }
-            return 0;
-        }
-        //padding
-        lseek(tar_fd, 512 - num_bytes, SEEK_CUR);
-    }
-    return 0;
-}
+int is_file(int tar_fd, char *path);
 
 /**
  * Checks whether an entry exists in the archive and is a symlink.
@@ -177,24 +101,7 @@ int is_file(int tar_fd, char *path){
  * @return zero if no entry at the given path exists in the archive or the entry is not symlink,
  *         any other value otherwise.
  */
-int is_symlink(int tar_fd, char *path){
-    tar_header_t header;
-    ssize_t num_bytes;
-
-    while((num_bytes = read(tar_fd, &header, sizeof(tar_header_t))) == sizeof(tar_header_t)){
-        // path entry (compare)
-        if (strcnmp(header.name, path, sizeof(header.name)) == 0 ){
-            // same but for files
-            if (header.typeflag == '2'){
-                return 3;
-            }
-            return 0;
-        }
-        //padding
-        lseek(tar_fd, 512 - num_bytes, SEEK_CUR);
-    }
-    return 0;
-}
+int is_symlink(int tar_fd, char *path);
 
 
 /**
