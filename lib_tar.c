@@ -133,7 +133,22 @@ int is_file(int tar_fd, char *path){
  * @return zero if no entry at the given path exists in the archive or the entry is not symlink,
  *         any other value otherwise.
  */
-int is_symlink(int tar_fd, char *path) {
+int is_symlink(int tar_fd, char *path){
+    tar_header_t header;
+    ssize_t num_bytes;
+
+    while((num_bytes = read(tar_fd, &header, sizeof(tar_header_t))) == sizeof(tar_header_t)){
+        // path entry (compare)
+        if (strcnmp(header.name, path, sizeof(header.name)) == 0 ){
+            // same but for syst link
+            if (header.typeflag == '2'){
+                return 3;
+            }
+            return 0;
+        }
+        //padding
+        lseek(tar_fd, 512 - num_bytes, SEEK_CUR);
+    }
     return 0;
 }
 
@@ -161,7 +176,35 @@ int is_symlink(int tar_fd, char *path) {
  *         any other value otherwise.
  */
 int list(int tar_fd, char *path, char **entries, size_t *no_entries) {
-    return 0;
+    tar_header_t header;
+    ssize_t num_bytes;
+    size_t lenght_of_path = strlen(path);
+    size_t entries_compt = 0;
+
+    // while on header
+    while ((num_bytes = read(tar_fd, &header, sizeof(tar_header_t))) == sizeof(tar_header_t)) {
+        // entry begin with path ?
+        if (strncmp(header.name, path, lenght_of_path) == 0) {
+            char *subpath = header.name + lenght_of_path;
+            if (strchr(subpath, '/') == NULL || strchr(subpath, '/') == subpath + strlen(subpath) - 1) {
+                // add to table if ok
+                if (entries_compt < *no_entries) {
+                    strncpy(entries[entries_compt], header.name, sizeof(header.name));
+                }
+                entries_compt++;
+            }
+        }
+        // padding
+        lseek(tar_fd, 512 - num_bytes, SEEK_CUR);
+    }
+
+    *no_entries = entries_compt;
+    // return 0 if not found
+    if (entries_compt > 0) {
+        return 3;
+    } else {
+        return 0;
+    }
 }
 
 /**
@@ -183,5 +226,52 @@ int list(int tar_fd, char *path, char **entries, size_t *no_entries) {
  *
  */
 ssize_t read_file(int tar_fd, char *path, size_t offset, uint8_t *dest, size_t *len) {
-    return 0;
+    tar_header_t header;
+    ssize_t num_bytes;
+
+    // while on header tar
+    while ((num_bytes = read(tar_fd, &header, sizeof(tar_header_t))) == sizeof(tar_header_t)) {
+        // size of file
+        size_t file_size = TAR_INT(header.size);
+        
+        if (strncmp(header.name, path, sizeof(header.name)) != 0) {
+            size_t file_size = TAR_INT(header.size);
+            lseek(tar_fd, ((file_size + 511) / 512) * 512, SEEK_CUR);
+            continue;
+        }
+
+        // regaular file ?
+        if (header.typeflag != REGTYPE && header.typeflag != AREGTYPE) {
+            return -1;
+        }
+
+        // offset ok ?
+        if (offset >= file_size) {
+            return -2;
+        }
+
+        size_t bytes_lenght;
+        if (file_size - offset < *len) {
+            bytes_lenght = file_size - offset;
+        } else {
+            bytes_lenght = *len;
+        }
+
+        lseek(tar_fd, offset, SEEK_CUR);
+
+        // r data
+        ssize_t bytes_r = read(tar_fd, dest, bytes_lenght);
+        if (bytes_r < 0) {
+            return -1;
+        }
+
+        *len = bytes_r;
+
+        // data remaining
+        size_t bytes_left = file_size - offset - bytes_r;
+        if (bytes_left > 0) {
+            return bytes_left;
+        } else {
+            return 0;
+        }
 }
