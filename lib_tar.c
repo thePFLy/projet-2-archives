@@ -1,4 +1,5 @@
 #include "lib_tar.h"
+#include <string.h>
 
 /**
  * Checks whether the archive is valid.
@@ -19,6 +20,11 @@ int check_archive(int tar_fd){
 
     // valid magic 
     tar_header_t header;
+    ssize_t num_bytes = read(tar_fd, &header, sizeof(tar_header_t));
+    if (num_bytes != sizeof(tar_header_t)) {
+        return -1;
+    }
+
     if (strncmp(header.magic, TMAGIC, TMAGLEN) != 0) {
         return -1;
     }
@@ -84,7 +90,7 @@ int is_dir(int tar_fd, char *path){
 
     while((num_bytes = read(tar_fd, &header, sizeof(tar_header_t))) == sizeof(tar_header_t)){
         // path entry (compare)
-        if (strcnmp(header.name, path, sizeof(header.name)) == 0 ){
+        if (strncmp(header.name, path, sizeof(header.name)) == 0 ){
             // directory ? if yes -> not 0
             if (header.typeflag == '5'){
                 return 3;
@@ -112,7 +118,7 @@ int is_file(int tar_fd, char *path){
 
     while((num_bytes = read(tar_fd, &header, sizeof(tar_header_t))) == sizeof(tar_header_t)){
         // path entry (compare)
-        if (strcnmp(header.name, path, sizeof(header.name)) == 0 ){
+        if (strncmp(header.name, path, sizeof(header.name)) == 0 ){
             // same but for files
             if (header.typeflag == '0'){
                 return 3;
@@ -139,7 +145,7 @@ int is_symlink(int tar_fd, char *path){
 
     while((num_bytes = read(tar_fd, &header, sizeof(tar_header_t))) == sizeof(tar_header_t)){
         // path entry (compare)
-        if (strcnmp(header.name, path, sizeof(header.name)) == 0 ){
+        if (strncmp(header.name, path, sizeof(header.name)) == 0 ){
             // same but for syst link
             if (header.typeflag == '2'){
                 return 3;
@@ -189,7 +195,8 @@ int list(int tar_fd, char *path, char **entries, size_t *no_entries) {
             if (strchr(subpath, '/') == NULL || strchr(subpath, '/') == subpath + strlen(subpath) - 1) {
                 // add to table if ok
                 if (entries_compt < *no_entries) {
-                    strncpy(entries[entries_compt], header.name, sizeof(header.name));
+                    // tmp
+                    strncpy(entries[entries_compt], header.name, 100);
                 }
                 entries_compt++;
             }
@@ -233,7 +240,7 @@ ssize_t read_file(int tar_fd, char *path, size_t offset, uint8_t *dest, size_t *
     while ((num_bytes = read(tar_fd, &header, sizeof(tar_header_t))) == sizeof(tar_header_t)) {
         // size of file
         size_t file_size = TAR_INT(header.size);
-        
+
         if (strncmp(header.name, path, sizeof(header.name)) != 0) {
             size_t file_size = TAR_INT(header.size);
             lseek(tar_fd, ((file_size + 511) / 512) * 512, SEEK_CUR);
@@ -274,4 +281,6 @@ ssize_t read_file(int tar_fd, char *path, size_t offset, uint8_t *dest, size_t *
         } else {
             return 0;
         }
+    }
+    return -1;
 }
