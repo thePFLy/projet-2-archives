@@ -1,6 +1,39 @@
 #include "lib_tar.h"
 #include <string.h>
 
+int is_null_block(const tar_header_t *header) {
+    const uint8_t *bytes = (const uint8_t *)header;
+    for (size_t i = 0; i < sizeof(tar_header_t); i++) {
+        if (bytes[i] != 0) {
+            return 0; // non-null block
+        }
+    }
+    return 1; // null block
+}
+
+int resolve_symlink(int tar_fd, const char *symlink_path, char *resolved_path) {
+    tar_header_t header;
+    ssize_t num_bytes;
+
+    while ((num_bytes = read(tar_fd, &header, sizeof(tar_header_t))) == sizeof(tar_header_t)) {
+        if (is_null_block(&header)) {
+            break;
+        }
+
+        if (strncmp(header.name, symlink_path, strlen(symlink_path)) == 0 && header.typeflag == SYMTYPE) {
+            strncpy(resolved_path, header.linkname, sizeof(resolved_path) - 1);
+            resolved_path[sizeof(resolved_path) - 1] = '\0';
+            lseek(tar_fd, -sizeof(tar_header_t), SEEK_CUR);
+            return 0;
+        }
+
+        size_t file_size = TAR_INT(header.size);
+        lseek(tar_fd, ((file_size + 511) / 512) * 512, SEEK_CUR);
+    }
+
+    return -1;
+}
+
 /**
  * Checks whether the archive is valid.
  *
@@ -17,38 +50,54 @@
  *         -3 if the archive contains a header with an invalid checksum value
  */
 int check_archive(int tar_fd){
-
-    // valid magic 
     tar_header_t header;
-    ssize_t num_bytes = read(tar_fd, &header, sizeof(tar_header_t));
-    if (num_bytes != sizeof(tar_header_t)) {
-        return -1;
+    int valid_headers = 0;
+    ssize_t num_bytes;
+
+    while ((num_bytes = read(tar_fd, &header, sizeof(tar_header_t))) == sizeof(tar_header_t)) {
+        // check if header is null
+        if (is_null_block(&header)) {
+            tar_header_t next_header;
+            num_bytes = read(tar_fd, &next_header, sizeof(tar_header_t));
+            if (num_bytes == sizeof(tar_header_t) && is_null_block(&next_header)) {
+                break;
+            } else {
+                lseek(tar_fd, -sizeof(tar_header_t), SEEK_CUR);
+            }
+        }
+
+        // valid magic 
+        if (strncmp(header.magic, TMAGIC, TMAGLEN) != 0) {
+            return -1;
+        }
+
+        // valid version
+        if (strncmp(header.version, TVERSION, TVERSLEN) != 0) {
+            return -2;
+        }
+
+        // valid checksum value
+        char tmp_chksum[sizeof(header.chksum)];
+        memcpy(tmp_chksum, header.chksum, sizeof(header.chksum));
+        memset(header.chksum, ' ', sizeof(header.chksum));
+        int res_sum = 0;
+        uint8_t *header_bytes = (uint8_t *)&header;
+        for (size_t i = 0; i < sizeof(tar_header_t); i++) {
+            res_sum += header_bytes[i];
+        }
+        int stored_checksum = TAR_INT(tmp_chksum);
+        if (res_sum != stored_checksum) {
+            return -3;
+        }
+
+        valid_headers++;
+
+        // ignore file contents
+        size_t file_size = TAR_INT(header.size);
+        lseek(tar_fd, ((file_size + 511) / 512) * 512, SEEK_CUR);
     }
 
-    if (strncmp(header.magic, TMAGIC, TMAGLEN) != 0) {
-        return -1;
-    }
-
-    // valid version
-    if (strncmp(header.version, TVERSION, TVERSLEN) != 0){
-        return -2;
-    }
-
-    // valid checksum value
-    char tmp_chksum[sizeof(header.chksum)];
-    memcpy(tmp_chksum, header.chksum, sizeof(header.chksum));
-    memset(header.chksum, ' ', sizeof(header.chksum));
-    int res_sum = 0;
-    uint8_t *header_bytes = (uint8_t *)&header;
-    for (size_t i = 0; i < sizeof(tar_header_t); i++) {
-        res_sum += header_bytes[i];
-    }
-    int stored_checksum = TAR_INT(tmp_chksum);
-    if (res_sum != stored_checksum) {
-        return -3;
-    }
-
-    return 0;
+    return valid_headers;
 }
 
 /**
@@ -184,30 +233,66 @@ int is_symlink(int tar_fd, char *path){
 int list(int tar_fd, char *path, char **entries, size_t *no_entries) {
     tar_header_t header;
     ssize_t num_bytes;
-    size_t lenght_of_path = strlen(path);
-    size_t entries_compt = 0;
+    size_t path_length = strlen(path);
+    size_t entry_count = 0;
 
     // while on header
     while ((num_bytes = read(tar_fd, &header, sizeof(tar_header_t))) == sizeof(tar_header_t)) {
-        // entry begin with path ?
-        if (strncmp(header.name, path, lenght_of_path) == 0) {
-            char *subpath = header.name + lenght_of_path;
-            if (strchr(subpath, '/') == NULL || strchr(subpath, '/') == subpath + strlen(subpath) - 1) {
-                // add to table if ok
-                if (entries_compt < *no_entries) {
-                    // tmp
-                    strncpy(entries[entries_compt], header.name, 100);
+        // check if header is null
+        if (is_null_block(&header)) {
+            break;
+        }
+
+        size_t file_size = TAR_INT(header.size);
+
+        // resolve symlink
+        if (header.typeflag == SYMTYPE) {
+            char resolved_path[100];
+            if (resolve_symlink(tar_fd, header.name, resolved_path) == 0) {
+                if (strncmp(resolved_path, path, path_length) == 0) {
+                    char *subpath = resolved_path + path_length;
+                    char *slash_pos = strchr(subpath, '/');
+                    if (slash_pos == NULL || (slash_pos == subpath + strlen(subpath) - 1)) {
+                        if (entry_count < *no_entries) {
+                            strncpy(entries[entry_count], resolved_path, 100);
+                            entries[entry_count][99] = '\0';
+                        }
+                        entry_count++;
+                    }
                 }
-                entries_compt++;
+                continue;
             }
         }
-        // padding
-        lseek(tar_fd, 512 - num_bytes, SEEK_CUR);
+
+        // entry begin with path ?
+        if (strncmp(header.name, path, path_length) == 0) {
+            char *subpath = header.name + path_length;
+
+            char *slash_pos = strchr(subpath, '/');
+            if (slash_pos == NULL || (slash_pos == subpath + strlen(subpath) - 1)) {
+                // add to table if ok
+                if (entry_count < *no_entries) {
+                    // tmp
+                    strncpy(entries[entry_count], header.name, 100);
+                    // null-terminator at the end of entry
+                    entries[entry_count][99] = '\0';
+                }
+                entry_count++;
+            }
+        }
+
+        // ignore file contents
+        lseek(tar_fd, ((file_size + 511) / 512) * 512, SEEK_CUR);
     }
 
-    *no_entries = entries_compt;
+    if (num_bytes < 0) {
+        return -1;
+    }
+
+    *no_entries = entry_count;
+
     // return 0 if not found
-    if (entries_compt > 0) {
+    if (entry_count > 0) {
         return 3;
     } else {
         return 0;
@@ -247,7 +332,15 @@ ssize_t read_file(int tar_fd, char *path, size_t offset, uint8_t *dest, size_t *
             continue;
         }
 
-        // regaular file ?
+        // symbolic link ?
+        if (header.typeflag == SYMTYPE) {
+            char link_target[sizeof(header.linkname) + 1];
+            strncpy(link_target, header.linkname, sizeof(link_target) - 1);
+            link_target[sizeof(link_target) - 1] = '\0';
+            return read_file(tar_fd, link_target, offset, dest, len);
+        }
+
+        // regular file ?
         if (header.typeflag != REGTYPE && header.typeflag != AREGTYPE) {
             return -1;
         }
